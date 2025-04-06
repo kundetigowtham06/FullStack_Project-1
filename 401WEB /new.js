@@ -1,9 +1,9 @@
-const { initializeApp, cert } = require('firebase-admin/app');
-const { getFirestore } = require('firebase-admin/firestore');
 const express = require('express');
 const path = require('path');
-const app = express();
+const bcrypt = require('bcrypt');
 const admin = require('firebase-admin');
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getFirestore } = require('firebase-admin/firestore');
 const serviceAccount = require('./key.json');
 
 admin.initializeApp({
@@ -11,8 +11,11 @@ admin.initializeApp({
 });
 
 const db = getFirestore();
+const app = express();
 const port = 3000;
 
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
@@ -27,35 +30,46 @@ app.get('/signup', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'signup.html'));
 });
 
-app.get('/signupSubmit', (req, res) => {
-  const { name, email, password } = req.query;
-  db.collection('SignUp-Details').add({
+app.post('/signupSubmit', async (req, res) => {
+  const { name, email, password } = req.body;
+
+  const existingUser = await db.collection('SignUp-Details').where('Email', '==', email).get();
+  if (!existingUser.empty) {
+    return res.status(400).send('Error: Email already exists. Please use a different email.');
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  await db.collection('SignUp-Details').add({
     Name: name,
     Email: email,
-    Password: password
-  })
-  .then(() => {
-    res.send('Sign Up successful');
-  })
-  .catch((error) => {
-    res.send('Error: ' + error.message);
+    Password: hashedPassword
   });
+
+  res.send('Sign Up successful! Please log in.');
 });
 
-app.get('/loginSubmit', (req, res) => {
-  const { email, password } = req.query;
-  db.collection('SignUp-Details').where('Email', '==', email)
-    .where('Password', '==', password).get()
-    .then((querySnapshot) => {
-      if (!querySnapshot.empty) {
-        res.sendFile(path.join(__dirname, 'public', 'weather.html'));
-      } else {
-        res.sendFile(path.join(__dirname, 'public', 'signup.html'));
-      }
-    })
-    .catch((error) => {
-      res.send('Error: ' + error.message);
-    });
+app.post('/loginSubmit', async (req, res) => {
+  const { email, password } = req.body;
+  const userSnapshot = await db.collection('SignUp-Details').where('Email', '==', email).get();
+
+  if (userSnapshot.empty) {
+    return res.status(400).send('Error: Email not found. Please sign up.');
+  }
+
+  for (const doc of userSnapshot.docs) {
+    const userData = doc.data();
+    const passwordMatch = await bcrypt.compare(password, userData.Password);
+    if (passwordMatch) {
+      return res.redirect('/weather');
+    }
+  }
+
+  return res.status(401).send('Error: Incorrect password.');
+});
+
+app.get('/weather', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'weather.html'));
 });
 
 app.listen(port, () => {
